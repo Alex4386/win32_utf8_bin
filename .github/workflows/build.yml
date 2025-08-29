@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build-msvc:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        platform: [x64, Win32]
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        repository: thpatch/win32_utf8
+    - name: Set up MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+    - name: Build the DLL
+      run: msbuild win32_utf8.vcxproj /p:Configuration="Release Dynamic" /p:Platform=${{ matrix.platform }} /p:PlatformToolset=v143
+    - name: Upload artifact (MSVC ${{ matrix.platform }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: win32_utf8_dll_msvc_${{ matrix.platform }}
+        path: bin/win32_utf8_*.dll
+
+  build-mingw:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            toolchain: x86_64-w64-mingw32
+            artifact_name: win32_utf8_dll_mingw_x64
+          - arch: i686
+            toolchain: i686-w64-mingw32
+            artifact_name: win32_utf8_dll_mingw_x86
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        repository: thpatch/win32_utf8
+    - name: Install MinGW-w64
+      run: sudo apt-get update && sudo apt-get install -y mingw-w64
+    - name: Build the DLL (MinGW ${{ matrix.arch }})
+      run: |
+        ${{ matrix.toolchain }}-gcc -shared -o win32_utf8.dll \
+        win32_utf8_build_dynamic.c \
+        -I./src \
+        -DUNICODE -D_UNICODE \
+        -mwindows \
+        -ldsound -lpsapi -lole32 -lshlwapi -lversion -lwininet
+    - name: Upload artifact (MinGW ${{ matrix.arch }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: win32_utf8.dll
