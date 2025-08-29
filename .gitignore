@@ -1,0 +1,14 @@
+/build
+/win32_utf8
+/win32_utf8.*.dll
+/win32_utf8_launcher_*.exe
+/win32_utf8.*.o
+
+# Propagator DLL artifacts
+/propagator.*.dll
+/propagator_dll_*.o
+/dll_propagator/dll_propagator.*.dll
+/dll_propagator/child.dll
+/launcher/propagator_dll_*.o
+/launcher/win32_utf8_launcher*.exe
+
