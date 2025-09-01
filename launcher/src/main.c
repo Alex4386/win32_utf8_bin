@@ -140,7 +140,7 @@ int main(int argc, char *argv[]) {
     CloseHandle(pi.hThread);
     
     DeleteFile(propagatorDllPath);
-    RemoveDirectory(tempDir);
+    // RemoveDirectory(tempDir);
     DPRINTF("Target process finished. Cleaning up and exiting.\n");
 
     return 0;

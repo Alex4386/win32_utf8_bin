@@ -29,7 +29,7 @@ LDFLAGS = -shared
 all: $(DLL_NAME)
 
 $(DLL_NAME): $(SRC) $(EMBEDDED_OBJ)
-	$(CC) $(LDFLAGS) -o $@ $(SRC) $(EMBEDDED_OBJ) -lshlwapi -DPROPAGATED_DLL_NAME="\"$(notdir $(DLL_TO_EMBED))\""
+	$(CC) $(LDFLAGS) -o $@ $(SRC) $(EMBEDDED_OBJ) -lshlwapi -DPROPAGATED_DLL_NAME="\"$(notdir $(DLL_TO_EMBED))\"" -DPROPAGATED_DLL_NAME_W=L"\"$(notdir $(DLL_TO_EMBED))\""
 	rm -f child.dll
 
 $(EMBEDDED_OBJ):

