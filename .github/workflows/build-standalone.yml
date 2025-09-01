@@ -1,0 +1,30 @@
+name: Build Launcher
+
+on:
+  push:
+    branches: [ "feature/standalone" ]
+  pull_request:
+    branches: [ "main", "feature/standalone" ]
+  workflow_dispatch:
+
+jobs:
+  build-launcher-mingw:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+    - name: Build project (${{ matrix.arch }})
+      run: make ARCH=${{ matrix.arch }}
+
+    - name: Upload launcher artifact (${{ matrix.arch }})
+      uses: actions/upload-artifact@v4
+      with:
+        name: win32_utf8_launcher_${{ matrix.arch }}
+        path: win32_utf8_launcher_${{ matrix.arch }}.exe
