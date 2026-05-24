@@ -19,14 +19,20 @@ TARGET = $(notdir $(LAUNCHER_EXE))
 
 all: $(TARGET)
 
+tests:
+	$(MAKE) -C tests ARCH=$(ARCH)
+
+test-injection: $(PROPAGATOR_DLL) tests
+	$(MAKE) -C tests ARCH=$(ARCH) run-injection
+
 $(TARGET): $(LAUNCHER_EXE)
 	cp $< $@
 
-$(LAUNCHER_EXE): $(PROPAGATOR_DLL)
-	$(MAKE) -C launcher ARCH=$(ARCH) PROPAGATOR_DLL=$(abspath $<)
+$(LAUNCHER_EXE): $(PROPAGATOR_DLL) $(WIN32_UTF8_DLL)
+	$(MAKE) -C launcher ARCH=$(ARCH) PROPAGATOR_DLL=$(abspath $(PROPAGATOR_DLL)) PAYLOAD_DLL=$(abspath $(WIN32_UTF8_DLL))
 
-$(PROPAGATOR_DLL): $(WIN32_UTF8_DLL)
-	$(MAKE) -C dll_propagator ARCH=$(ARCH) DLL_TO_EMBED=$(abspath $<)
+$(PROPAGATOR_DLL):
+	$(MAKE) -C dll_propagator ARCH=$(ARCH)
 
 $(WIN32_UTF8_DLL):
 	./build-dll.sh $(ARCH)
@@ -34,6 +40,9 @@ $(WIN32_UTF8_DLL):
 clean:
 	rm -f win32_utf8_launcher_*.exe
 	rm -f launcher/win32_utf8_launcher_*.exe
-	rm -f ./win32_utf8.*.dll win32_utf8/win32_utf8.dll
+	rm -f ./win32_utf8.*.dll ./win32_utf8.*.o win32_utf8/win32_utf8.dll
 	$(MAKE) -C dll_propagator clean
 	$(MAKE) -C launcher clean
+	$(MAKE) -C tests clean
+
+.PHONY: all tests test-injection clean

@@ -1,4 +1,4 @@
-# Makefile for win32_utf8
+# Makefile for win32_utf8 dynamic payload builds
 
 # Cross-compiler prefix
 CROSS_PREFIX_x64 ?= x86_64-w64-mingw32-

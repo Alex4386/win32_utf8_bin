@@ -1,222 +1,416 @@
 #include <windows.h>
 #include <stdio.h>
-#include <shlwapi.h> // For PathRemoveFileSpecA/W and PathAppendA/W
-#include "dll_name.h"
-#include "dll_include.h"
+#include "detour.h"
 #include "../../common/shared.h"
 
-#pragma pack(push, 1)
-struct JMP_REL32 {
-    BYTE Opcode; // E9
-    DWORD Offset;
-};
-#pragma pack(pop)
+#ifndef DEBUG
+#define DEBUG 1
+#endif
 
-#define HOOK_SIZE sizeof(struct JMP_REL32)
+#if DEBUG
+#define DLOG(fmt, ...) do { \
+    char _buf[512]; \
+    snprintf(_buf, sizeof(_buf) - 1, "win32_utf8 propagator: " fmt, ##__VA_ARGS__); \
+    _buf[sizeof(_buf) - 1] = '\0'; \
+    OutputDebugStringA(_buf); \
+} while (0)
+#else
+#define DLOG(fmt, ...) do {} while (0)
+#endif
 
-// Struct to hold hook information
-struct HOOK_INFO {
-    LPVOID pTarget;
-    LPVOID pDetour;
-    BYTE OriginalBytes[HOOK_SIZE];
-};
+typedef BOOL (WINAPI *PFN_CreateProcessA)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+typedef BOOL (WINAPI *PFN_CreateProcessW)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+typedef BOOL (WINAPI *PFN_CreateProcessAsUserA)(HANDLE, LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+typedef BOOL (WINAPI *PFN_CreateProcessAsUserW)(HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+typedef BOOL (WINAPI *PFN_CreateProcessWithLogonW)(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPCWSTR, LPWSTR, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+typedef BOOL (WINAPI *PFN_CreateProcessWithTokenW)(HANDLE, DWORD, LPCWSTR, LPWSTR, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 
-// Function prototypes
-BOOL InstallHook(struct HOOK_INFO *pHook, LPVOID pTarget, LPVOID pDetour);
-BOOL UninstallHook(struct HOOK_INFO *pHook);
-void InjectDll(HANDLE hProcess, const char* dllPath);
-void InjectDllW(HANDLE hProcess, const wchar_t* dllPath);
-
-// Detour function prototypes
 BOOL WINAPI DetourCreateProcessA(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
 BOOL WINAPI DetourCreateProcessW(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+BOOL WINAPI DetourCreateProcessAsUserA(HANDLE, LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+BOOL WINAPI DetourCreateProcessAsUserW(HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+BOOL WINAPI DetourCreateProcessWithLogonW(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPCWSTR, LPWSTR, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+BOOL WINAPI DetourCreateProcessWithTokenW(HANDLE, DWORD, LPCWSTR, LPWSTR, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 
-// Hook information for our targets
-struct HOOK_INFO g_CreateProcessAHook;
-struct HOOK_INFO g_CreateProcessWHook;
+static PROPAGATOR_CONFIG g_config;
+static volatile LONG g_init_started = 0;
+static volatile LONG g_init_done = 0;
+static DWORD g_init_result = ERROR_SUCCESS;
 
-BOOL InstallHook(struct HOOK_INFO *pHook, LPVOID pTarget, LPVOID pDetour) {
-    pHook->pTarget = pTarget;
-    pHook->pDetour = pDetour;
+static PFN_CreateProcessA RealCreateProcessA = NULL;
+static PFN_CreateProcessW RealCreateProcessW = NULL;
+static PFN_CreateProcessAsUserA RealCreateProcessAsUserA = NULL;
+static PFN_CreateProcessAsUserW RealCreateProcessAsUserW = NULL;
+static PFN_CreateProcessWithLogonW RealCreateProcessWithLogonW = NULL;
+static PFN_CreateProcessWithTokenW RealCreateProcessWithTokenW = NULL;
 
-    DWORD oldProtect;
-    if (!VirtualProtect(pTarget, HOOK_SIZE, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+static DWORD propagate_to_child(HANDLE process) {
+    DWORD result;
+
+    if (!process || !g_config.propagator_path[0]) {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    result = inject_and_initialize_propagator_w(process, g_config.propagator_path, &g_config);
+    if (result != ERROR_SUCCESS) {
+        DLOG("child propagation failed: %lu\n", result);
+    }
+    return result;
+}
+
+static void resume_if_needed(HANDLE thread, BOOL caller_requested_suspended) {
+    if (thread && !caller_requested_suspended) {
+        ResumeThread(thread);
+    }
+}
+
+static BOOL hook_proc(HMODULE module, const char *name, void *detour, void **real) {
+    void *target;
+    void *trampoline = NULL;
+
+    if (!module) {
         return FALSE;
     }
 
-    // Save original bytes
-    memcpy(pHook->OriginalBytes, pTarget, HOOK_SIZE);
-
-    // Write the JMP instruction
-    struct JMP_REL32 jmp;
-    jmp.Opcode = 0xE9; // JMP rel32
-    jmp.Offset = (DWORD)((LPBYTE)pDetour - ((LPBYTE)pTarget + HOOK_SIZE));
-
-    memcpy(pTarget, &jmp, HOOK_SIZE);
-
-    VirtualProtect(pTarget, HOOK_SIZE, oldProtect, &oldProtect);
-    return TRUE;
-}
-
-BOOL UninstallHook(struct HOOK_INFO *pHook) {
-    DWORD oldProtect;
-    if (!VirtualProtect(pHook->pTarget, HOOK_SIZE, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+    target = (void*)GetProcAddress(module, name);
+    if (!target) {
         return FALSE;
     }
 
-    // Restore original bytes
-    memcpy(pHook->pTarget, pHook->OriginalBytes, HOOK_SIZE);
+    if (!DetourAttach(target, detour, &trampoline)) {
+        DLOG("failed to hook %s (%lu)\n", name, GetLastError());
+        return FALSE;
+    }
 
-    VirtualProtect(pHook->pTarget, HOOK_SIZE, oldProtect, &oldProtect);
+    if (*real == NULL) {
+        *real = trampoline;
+    }
     return TRUE;
 }
 
-void InjectDll(HANDLE hProcess, const char* dllPath) {
-    LPVOID remoteMem = VirtualAllocEx(hProcess, NULL, strlen(dllPath) + 1, MEM_COMMIT, PAGE_READWRITE);
-    if (remoteMem) {
-        WriteProcessMemory(hProcess, remoteMem, dllPath, strlen(dllPath) + 1, NULL);
-        HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, remoteMem, 0, NULL);
-        if (hThread) {
-            WaitForSingleObject(hThread, INFINITE);
-            CloseHandle(hThread);
-        }
-        VirtualFreeEx(hProcess, remoteMem, 0, MEM_RELEASE);
-    }
+static DWORD hook_process_apis(void) {
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+    HMODULE advapi32 = LoadLibraryW(L"advapi32.dll");
+    BOOL hooked_process_create = FALSE;
+
+    hooked_process_create |= hook_proc(kernelbase, "CreateProcessA", DetourCreateProcessA, (void**)&RealCreateProcessA);
+    hooked_process_create |= hook_proc(kernel32, "CreateProcessA", DetourCreateProcessA, (void**)&RealCreateProcessA);
+    hooked_process_create |= hook_proc(kernelbase, "CreateProcessW", DetourCreateProcessW, (void**)&RealCreateProcessW);
+    hooked_process_create |= hook_proc(kernel32, "CreateProcessW", DetourCreateProcessW, (void**)&RealCreateProcessW);
+
+    hook_proc(advapi32, "CreateProcessAsUserA", DetourCreateProcessAsUserA, (void**)&RealCreateProcessAsUserA);
+    hook_proc(advapi32, "CreateProcessAsUserW", DetourCreateProcessAsUserW, (void**)&RealCreateProcessAsUserW);
+    hook_proc(advapi32, "CreateProcessWithLogonW", DetourCreateProcessWithLogonW, (void**)&RealCreateProcessWithLogonW);
+    hook_proc(advapi32, "CreateProcessWithTokenW", DetourCreateProcessWithTokenW, (void**)&RealCreateProcessWithTokenW);
+
+    return hooked_process_create ? ERROR_SUCCESS : ERROR_PROC_NOT_FOUND;
 }
 
-void InjectDllW(HANDLE hProcess, const wchar_t* dllPath) {
-    LPVOID remoteMem = VirtualAllocEx(hProcess, NULL, (wcslen(dllPath) + 1) * sizeof(wchar_t), MEM_COMMIT, PAGE_READWRITE);
-    if (remoteMem) {
-        WriteProcessMemory(hProcess, remoteMem, dllPath, (wcslen(dllPath) + 1) * sizeof(wchar_t), NULL);
-        HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryW, remoteMem, 0, NULL);
-        if (hThread) {
-            WaitForSingleObject(hThread, INFINITE);
-            CloseHandle(hThread);
-        }
-        VirtualFreeEx(hProcess, remoteMem, 0, MEM_RELEASE);
+static DWORD validate_config(const PROPAGATOR_CONFIG *config) {
+    DWORD i;
+
+    if (!config) {
+        return ERROR_INVALID_PARAMETER;
     }
+    if (config->magic != PROPAGATOR_MAGIC || config->version != PROPAGATOR_VERSION) {
+        return ERROR_BAD_FORMAT;
+    }
+    if (!config->propagator_path[0] || config->payload_count > PROPAGATOR_MAX_PAYLOADS) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    for (i = 0; i < config->payload_count; ++i) {
+        if (!config->payloads[i].dll_path[0]) {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+    return ERROR_SUCCESS;
+}
+
+static FARPROC find_payload_export(HMODULE module, const char *name) {
+    FARPROC proc;
+    char decorated[PROPAGATOR_INIT_EXPORT_LEN + 8];
+
+    proc = GetProcAddress(module, name);
+    if (proc) {
+        return proc;
+    }
+
+    snprintf(decorated, sizeof(decorated), "%s@4", name);
+    proc = GetProcAddress(module, decorated);
+    if (proc) {
+        return proc;
+    }
+
+    snprintf(decorated, sizeof(decorated), "_%s@4", name);
+    return GetProcAddress(module, decorated);
+}
+
+static DWORD load_payloads(void) {
+    DWORD i;
+
+    for (i = 0; i < g_config.payload_count; ++i) {
+        HMODULE module = LoadLibraryW(g_config.payloads[i].dll_path);
+        if (!module) {
+            return GetLastError();
+        }
+
+        if (g_config.payloads[i].init_export[0]) {
+            typedef DWORD (WINAPI *PFN_PayloadInit)(void*);
+            PFN_PayloadInit init = (PFN_PayloadInit)find_payload_export(module, g_config.payloads[i].init_export);
+            if (!init) {
+                return GetLastError();
+            }
+            {
+                void *init_data = g_config.payloads[i].init_data_size
+                    ? g_config.payloads[i].init_data
+                    : NULL;
+                DWORD result = init(init_data);
+                if (result != ERROR_SUCCESS) {
+                    return result;
+                }
+            }
+        }
+
+    }
+    return ERROR_SUCCESS;
+}
+
+__declspec(dllexport) DWORD WINAPI PropagatorInitialize(void *reserved) {
+    DWORD result;
+    PROPAGATOR_CONFIG local_config;
+
+    if (g_init_done) {
+        return g_init_result;
+    }
+
+    if (InterlockedCompareExchange(&g_init_started, 1, 0) != 0) {
+        while (!g_init_done) {
+            Sleep(1);
+        }
+        return g_init_result;
+    }
+
+    if (!reserved) {
+        result = ERROR_INVALID_PARAMETER;
+        goto finish;
+    }
+
+    memcpy(&local_config, reserved, sizeof(local_config));
+    result = validate_config(&local_config);
+    if (result != ERROR_SUCCESS) {
+        goto finish;
+    }
+
+    memcpy(&g_config, &local_config, sizeof(g_config));
+
+    result = load_payloads();
+    if (result == ERROR_SUCCESS) {
+        result = hook_process_apis();
+    }
+
+finish:
+    g_init_result = result;
+    InterlockedExchange(&g_init_done, 1);
+    DLOG("initializer finished: %lu\n", result);
+    return result;
 }
 
 BOOL WINAPI DetourCreateProcessA(
-    LPCSTR                lpApplicationName,
-    LPSTR                 lpCommandLine,
-    LPSECURITY_ATTRIBUTES lpProcessAttributes,
-    LPSECURITY_ATTRIBUTES lpThreadAttributes,
-    BOOL                  bInheritHandles,
-    DWORD                 dwCreationFlags,
-    LPVOID                lpEnvironment,
-    LPCSTR                lpCurrentDirectory,
-    LPSTARTUPINFOA        lpStartupInfo,
-    LPPROCESS_INFORMATION lpProcessInformation
+    LPCSTR application_name,
+    LPSTR command_line,
+    LPSECURITY_ATTRIBUTES process_attributes,
+    LPSECURITY_ATTRIBUTES thread_attributes,
+    BOOL inherit_handles,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCSTR current_directory,
+    LPSTARTUPINFOA startup_info,
+    LPPROCESS_INFORMATION process_information
 ) {
-    // This unhook-call-rehook pattern is NOT thread-safe.
-    UninstallHook(&g_CreateProcessAHook);
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
 
-    dwCreationFlags |= CREATE_SUSPENDED;
-    BOOL result = CreateProcessA(
-        lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes,
-        bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory,
-        lpStartupInfo, lpProcessInformation
-    );
-
-    if (result) {
-        char propagatorPath[MAX_PATH];
-        char childDllPath[MAX_PATH];
-        HMODULE hModule;
-
-        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)DetourCreateProcessA, &hModule)) {
-            GetModuleFileNameA(hModule, propagatorPath, sizeof(propagatorPath));
-            
-            strcpy(childDllPath, propagatorPath);
-            PathRemoveFileSpecA(childDllPath);
-            PathAppendA(childDllPath, PROPAGATED_DLL_NAME);
-
-            // Inject the child DLL first, then the propagator to continue the chain.
-            InjectDll(lpProcessInformation->hProcess, childDllPath);
-            InjectDll(lpProcessInformation->hProcess, propagatorPath);
-        }
-        ResumeThread(lpProcessInformation->hThread);
+    if (!RealCreateProcessA) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
     }
 
-    InstallHook(&g_CreateProcessAHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessA"), DetourCreateProcessA);
+    result = RealCreateProcessA(application_name, command_line, process_attributes, thread_attributes,
+                                inherit_handles, creation_flags | CREATE_SUSPENDED, environment,
+                                current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
     return result;
 }
 
 BOOL WINAPI DetourCreateProcessW(
-    LPCWSTR               lpApplicationName,
-    LPWSTR                lpCommandLine,
-    LPSECURITY_ATTRIBUTES lpProcessAttributes,
-    LPSECURITY_ATTRIBUTES lpThreadAttributes,
-    BOOL                  bInheritHandles,
-    DWORD                 dwCreationFlags,
-    LPVOID                lpEnvironment,
-    LPCWSTR               lpCurrentDirectory,
-    LPSTARTUPINFOW        lpStartupInfo,
-    LPPROCESS_INFORMATION lpProcessInformation
+    LPCWSTR application_name,
+    LPWSTR command_line,
+    LPSECURITY_ATTRIBUTES process_attributes,
+    LPSECURITY_ATTRIBUTES thread_attributes,
+    BOOL inherit_handles,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCWSTR current_directory,
+    LPSTARTUPINFOW startup_info,
+    LPPROCESS_INFORMATION process_information
 ) {
-    // This unhook-call-rehook pattern is NOT thread-safe.
-    UninstallHook(&g_CreateProcessWHook);
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
 
-    dwCreationFlags |= CREATE_SUSPENDED;
-    BOOL result = CreateProcessW(
-        lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes,
-        bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory,
-        lpStartupInfo, lpProcessInformation
-    );
-
-    if (result) {
-        wchar_t propagatorPath[MAX_PATH];
-        wchar_t childDllPath[MAX_PATH];
-        HMODULE hModule;
-
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)DetourCreateProcessW, &hModule)) {
-            GetModuleFileNameW(hModule, propagatorPath, sizeof(propagatorPath) / sizeof(wchar_t));
-            
-            wcscpy(childDllPath, propagatorPath);
-            PathRemoveFileSpecW(childDllPath);
-            PathAppendW(childDllPath, PROPAGATED_DLL_NAME_W);
-
-            // Inject the child DLL first, then the propagator to continue the chain.
-            InjectDllW(lpProcessInformation->hProcess, childDllPath);
-            InjectDllW(lpProcessInformation->hProcess, propagatorPath);
-        }
-        ResumeThread(lpProcessInformation->hThread);
+    if (!RealCreateProcessW) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
     }
 
-    InstallHook(&g_CreateProcessWHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessW"), DetourCreateProcessW);
+    result = RealCreateProcessW(application_name, command_line, process_attributes, thread_attributes,
+                                inherit_handles, creation_flags | CREATE_SUSPENDED, environment,
+                                current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
     return result;
 }
 
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    switch (fdwReason) {
+BOOL WINAPI DetourCreateProcessAsUserA(
+    HANDLE token,
+    LPCSTR application_name,
+    LPSTR command_line,
+    LPSECURITY_ATTRIBUTES process_attributes,
+    LPSECURITY_ATTRIBUTES thread_attributes,
+    BOOL inherit_handles,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCSTR current_directory,
+    LPSTARTUPINFOA startup_info,
+    LPPROCESS_INFORMATION process_information
+) {
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
+
+    if (!RealCreateProcessAsUserA) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
+    }
+
+    result = RealCreateProcessAsUserA(token, application_name, command_line, process_attributes,
+                                      thread_attributes, inherit_handles, creation_flags | CREATE_SUSPENDED,
+                                      environment, current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
+    return result;
+}
+
+BOOL WINAPI DetourCreateProcessAsUserW(
+    HANDLE token,
+    LPCWSTR application_name,
+    LPWSTR command_line,
+    LPSECURITY_ATTRIBUTES process_attributes,
+    LPSECURITY_ATTRIBUTES thread_attributes,
+    BOOL inherit_handles,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCWSTR current_directory,
+    LPSTARTUPINFOW startup_info,
+    LPPROCESS_INFORMATION process_information
+) {
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
+
+    if (!RealCreateProcessAsUserW) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
+    }
+
+    result = RealCreateProcessAsUserW(token, application_name, command_line, process_attributes,
+                                      thread_attributes, inherit_handles, creation_flags | CREATE_SUSPENDED,
+                                      environment, current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
+    return result;
+}
+
+BOOL WINAPI DetourCreateProcessWithLogonW(
+    LPCWSTR username,
+    LPCWSTR domain,
+    LPCWSTR password,
+    DWORD logon_flags,
+    LPCWSTR application_name,
+    LPWSTR command_line,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCWSTR current_directory,
+    LPSTARTUPINFOW startup_info,
+    LPPROCESS_INFORMATION process_information
+) {
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
+
+    if (!RealCreateProcessWithLogonW) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
+    }
+
+    result = RealCreateProcessWithLogonW(username, domain, password, logon_flags, application_name,
+                                         command_line, creation_flags | CREATE_SUSPENDED, environment,
+                                         current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
+    return result;
+}
+
+BOOL WINAPI DetourCreateProcessWithTokenW(
+    HANDLE token,
+    DWORD logon_flags,
+    LPCWSTR application_name,
+    LPWSTR command_line,
+    DWORD creation_flags,
+    LPVOID environment,
+    LPCWSTR current_directory,
+    LPSTARTUPINFOW startup_info,
+    LPPROCESS_INFORMATION process_information
+) {
+    BOOL caller_suspended = (creation_flags & CREATE_SUSPENDED) != 0;
+    BOOL result;
+
+    if (!RealCreateProcessWithTokenW) {
+        SetLastError(ERROR_PROC_NOT_FOUND);
+        return FALSE;
+    }
+
+    result = RealCreateProcessWithTokenW(token, logon_flags, application_name, command_line,
+                                         creation_flags | CREATE_SUSPENDED, environment,
+                                         current_directory, startup_info, process_information);
+    if (result && process_information) {
+        propagate_to_child(process_information->hProcess);
+        resume_if_needed(process_information->hThread, caller_suspended);
+    }
+    return result;
+}
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+    (void)reserved;
+
+    switch (reason) {
         case DLL_PROCESS_ATTACH:
-            {
-                char selfPath[MAX_PATH];
-                char targetPath[MAX_PATH];
-
-                HMODULE hModule;
-                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)DllMain, &hModule)) {
-                    GetModuleFileNameA(hModule, selfPath, sizeof(selfPath));
-                    PathRemoveFileSpecA(selfPath);
-                    
-                    sprintf(targetPath, "%s\\%s", selfPath, PROPAGATED_DLL_NAME);
-                }
-
-                // Check if the file already exists (from a previous run)
-                if (GetFileAttributesA(targetPath) == INVALID_FILE_ATTRIBUTES) {
-                    write_resource_to_file(targetPath, CHILD_START, CHILD_END);
-                }
-
-                // Load the extracted DLL into the current process
-                LoadLibraryA(targetPath);
-            }
-            // Install hooks for child processes
-            InstallHook(&g_CreateProcessAHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessA"), DetourCreateProcessA);
-            InstallHook(&g_CreateProcessWHook, GetProcAddress(GetModuleHandle("kernel32.dll"), "CreateProcessW"), DetourCreateProcessW);
+            DisableThreadLibraryCalls(instance);
             break;
         case DLL_PROCESS_DETACH:
-            UninstallHook(&g_CreateProcessAHook);
-            UninstallHook(&g_CreateProcessWHook);
+            /*
+             * During process teardown, loader ordering can make hooked module
+             * pages unsafe to patch back. The process is exiting anyway, so
+             * leave hooks in place rather than risking a detach-time AV.
+             */
             break;
     }
     return TRUE;

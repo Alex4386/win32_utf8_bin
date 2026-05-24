@@ -2,7 +2,7 @@
 #define __CONFIG_H__
 
 // Set to 1 to enable debug printing, 0 to disable
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG
 #include <stdio.h>

@@ -18,9 +18,9 @@ jobs:
       matrix:
         platform: [x64, x86]
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
-        repository: thpatch/win32_utf8
+        submodules: recursive
     - name: Set up MSBuild
       uses: microsoft/setup-msbuild@v1.1
     - name: Build the DLL
@@ -29,12 +29,12 @@ jobs:
         if ($platform -eq "x86") {
           $platform = "Win32"
         }
-        msbuild win32_utf8.vcxproj /p:Configuration="Release Dynamic" /p:Platform=$platform /p:PlatformToolset=v143
+        msbuild win32_utf8/win32_utf8.vcxproj /p:Configuration="Release Dynamic" /p:Platform=$platform /p:PlatformToolset=v143
     - name: Upload artifact (MSVC ${{ matrix.platform }})
       uses: actions/upload-artifact@v4
       with:
         name: win32_utf8_dll_msvc_${{ matrix.platform }}
-        path: bin/win32_utf8_*.dll
+        path: win32_utf8/bin/win32_utf8_*.dll
 
   build-mingw:
     runs-on: ubuntu-latest
@@ -42,17 +42,15 @@ jobs:
       matrix:
         arch: [x64, x86]
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
-        repository: thpatch/win32_utf8
+        submodules: recursive
     - name: Install MinGW-w64
       run: sudo apt-get update && sudo apt-get install -y mingw-w64
     - name: Build the DLL (MinGW ${{ matrix.arch }})
-      run: |
-        curl -O https://raw.githubusercontent.com/Alex4386/win32_utf8_bin/main/resources/win32_utf8/Makefile
-        make -f Makefile ARCH=${{ matrix.arch }}
+      run: ./build-dll.sh ${{ matrix.arch }}
     - name: Upload artifact (MinGW ${{ matrix.arch }})
       uses: actions/upload-artifact@v4
       with:
         name: win32_utf8_dll_mingw_${{ matrix.arch }}
-        path: win32_utf8.dll
+        path: win32_utf8.${{ matrix.arch }}.dll
