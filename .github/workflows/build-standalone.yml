@@ -22,8 +22,8 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
-    - name: Build project (${{ matrix.arch }})
-      run: make ARCH=${{ matrix.arch }}
+    - name: Build launcher (${{ matrix.arch }})
+      run: ./build-dll.sh ${{ matrix.arch }} --launcher
 
     - name: Build smoke-test programs (${{ matrix.arch }})
       run: make tests ARCH=${{ matrix.arch }}

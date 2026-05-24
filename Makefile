@@ -19,6 +19,10 @@ TARGET = $(notdir $(LAUNCHER_EXE))
 
 all: $(TARGET)
 
+all-arch:
+	$(MAKE) ARCH=x86
+	$(MAKE) ARCH=x64
+
 tests:
 	$(MAKE) -C tests ARCH=$(ARCH)
 
@@ -45,4 +49,4 @@ clean:
 	$(MAKE) -C launcher clean
 	$(MAKE) -C tests clean
 
-.PHONY: all tests test-injection clean
+.PHONY: all all-arch tests test-injection clean
