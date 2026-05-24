@@ -15,3 +15,5 @@
 /tests/process_parent_*.exe
 /tests/payload_marker_*.dll
 /tests/injection_driver_*.exe
+/tests/win32_utf8_ansi_*.exe
+/tests/shell_link_ansi_*.exe
