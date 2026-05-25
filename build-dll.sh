@@ -6,7 +6,8 @@ ARCH=${1:-x64}
 BUILD_LAUNCHER=0
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 SOURCE_DIR="$SCRIPT_DIR/win32_utf8"
-WIN32_UTF8_MAKEFILE="$SCRIPT_DIR/resources/win32_utf8/Makefile"
+CROSS_PREFIX_x64=${CROSS_PREFIX_x64:-x86_64-w64-mingw32-}
+CROSS_PREFIX_x86=${CROSS_PREFIX_x86:-i686-w64-mingw32-}
 
 usage() {
     echo "usage: $0 [x86|x64|all] [--launcher]" >&2
@@ -42,11 +43,17 @@ ensure_source() {
         echo "hint: initialize the win32_utf8 submodule or set up $SOURCE_DIR before building" >&2
         exit 1
     fi
+}
 
-    if [ ! -f "$WIN32_UTF8_MAKEFILE" ]; then
-        echo "error: resources/win32_utf8/Makefile not found" >&2
-        exit 1
-    fi
+compiler_for_arch() {
+    case "$1" in
+        x64) echo "${CROSS_PREFIX_x64}gcc" ;;
+        x86) echo "${CROSS_PREFIX_x86}gcc" ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
 }
 
 build_arch() {
@@ -55,9 +62,15 @@ build_arch() {
     ensure_source
 
     (
+        local cc
+        cc=$(compiler_for_arch "$arch")
+
         cd "$SOURCE_DIR"
         rm -f win32_utf8.dll
-        make -f "$WIN32_UTF8_MAKEFILE" ARCH="$arch"
+        "$cc" -shared -mwindows -o win32_utf8.dll win32_utf8_build_dynamic.c \
+            -I"$SCRIPT_DIR/launcher/src" \
+            -DUNICODE -D_UNICODE \
+            -ldsound -lpsapi -lole32 -lshlwapi -lversion -lwininet
         cp ./win32_utf8.dll "$SCRIPT_DIR/win32_utf8.$arch.dll"
     )
     echo "Build complete. The DLL is at win32_utf8.$arch.dll"
