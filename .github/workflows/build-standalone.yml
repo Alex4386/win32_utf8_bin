@@ -25,11 +25,11 @@ jobs:
     - name: Build launcher (${{ matrix.arch }})
       run: ./build-dll.sh ${{ matrix.arch }} --launcher
 
-    - name: Build smoke-test programs (${{ matrix.arch }})
-      run: make tests ARCH=${{ matrix.arch }}
+    - name: Prepare runner artifact (${{ matrix.arch }})
+      run: make artifact ARCH=${{ matrix.arch }}
 
-    - name: Upload launcher artifact (${{ matrix.arch }})
+    - name: Upload runner artifact (${{ matrix.arch }})
       uses: actions/upload-artifact@v4
       with:
         name: win32_utf8_launcher_${{ matrix.arch }}
-        path: win32_utf8_launcher_${{ matrix.arch }}.exe
+        path: artifacts/win32_utf8_runner_${{ matrix.arch }}

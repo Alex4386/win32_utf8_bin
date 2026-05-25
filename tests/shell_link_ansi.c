@@ -141,7 +141,7 @@ int main(void) {
         goto cleanup_files;
     }
 
-    wprintf(L"shell_link_ansi ok: %ls\n", path);
+    printf("shell_link_ansi ok\n");
     exit_code = 0;
 
 cleanup_files:

@@ -1,4 +1,5 @@
 /build
+/artifacts
 /win32_utf8.*.dll
 /win32_utf8_launcher_*.exe
 /win32_utf8.*.o

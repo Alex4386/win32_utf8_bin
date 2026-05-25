@@ -86,6 +86,32 @@ static BOOL browse_directory(HWND owner, wchar_t *path, DWORD path_count) {
     return ok;
 }
 
+static void set_cwd_from_application_path(GUI_STATE *state, const wchar_t *path) {
+    wchar_t directory[MAX_PATH];
+    wchar_t *slash;
+    wchar_t *alt_slash;
+
+    if (!state || !path || !path[0]) {
+        return;
+    }
+
+    lstrcpynW(directory, path, MAX_PATH);
+    slash = wcsrchr(directory, L'\\');
+    alt_slash = wcsrchr(directory, L'/');
+    if (!slash || (alt_slash && alt_slash > slash)) {
+        slash = alt_slash;
+    }
+    if (!slash) {
+        return;
+    }
+    if (slash == directory) {
+        slash[1] = L'\0';
+    } else {
+        *slash = L'\0';
+    }
+    SetWindowTextW(state->cwd_edit, directory);
+}
+
 static void update_enabled_state(GUI_STATE *state) {
     BOOL use_args = Button_GetCheck(state->args_check) == BST_CHECKED;
     BOOL use_cwd = Button_GetCheck(state->cwd_check) == BST_CHECKED;
@@ -279,6 +305,7 @@ static LRESULT CALLBACK launch_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
                     GetWindowTextW(state->app_edit, path, MAX_PATH);
                     if (browse_application(hwnd, path, MAX_PATH)) {
                         SetWindowTextW(state->app_edit, path);
+                        set_cwd_from_application_path(state, path);
                     }
                     return 0;
                 }
