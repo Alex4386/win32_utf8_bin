@@ -283,6 +283,7 @@ int main(void) {
     PROCESS_INFORMATION pi;
     DWORD path_len;
     DWORD init_result;
+    DWORD child_exit_code;
     DWORD fallback_codepage = CP_ACP;
     int target_arg = -1;
     BOOL gui_mode = FALSE;
@@ -471,6 +472,11 @@ int main(void) {
 
     ResumeThread(pi.hThread);
     WaitForSingleObject(pi.hProcess, INFINITE);
+    if (GetExitCodeProcess(pi.hProcess, &child_exit_code)) {
+        exit_code = (int)child_exit_code;
+    } else {
+        exit_code = 1;
+    }
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
@@ -478,7 +484,6 @@ int main(void) {
     DeleteFileW(payload_dll_path);
     DeleteFileW(propagator_dll_path);
     RemoveDirectoryW(temp_dir);
-    exit_code = 0;
 
 cleanup_command:
     if (argv) {

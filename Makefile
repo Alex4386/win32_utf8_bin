@@ -44,7 +44,7 @@ artifact: $(TARGET) $(PROPAGATOR_DLL) $(WIN32_UTF8_DLL) tests
 	cp $(WIN32_UTF8_DLL) $(ARTIFACT_DIR)/
 	cp $(PROPAGATOR_DLL) $(ARTIFACT_DIR)/
 	cp $(ARTIFACT_TESTS) $(ARTIFACT_DIR)/tests/
-	printf '@echo off\r\nsetlocal\r\ncd /d "%%~dp0"\r\nset ARCH=$(ARCH)\r\nset PROP=dll_propagator.$(ARCH).dll\r\nset PAYLOAD=tests\\payload_marker_$(ARCH).dll\r\nset PROBE=tests\\probe_$(ARCH).exe\r\nset PARENT=tests\\process_parent_$(ARCH).exe\r\nset LAUNCHER=win32_utf8_launcher_$(ARCH).exe\r\n\r\ntests\\injection_driver_$(ARCH).exe %%PROP%% %%PAYLOAD%% %%PROBE%% direct payload_marker_$(ARCH).dll || exit /b 1\r\ntests\\injection_driver_$(ARCH).exe %%PROP%% %%PAYLOAD%% %%PARENT%% w %%PROBE%% payload_marker_$(ARCH).dll || exit /b 1\r\ntests\\injection_driver_$(ARCH).exe %%PROP%% %%PAYLOAD%% %%PARENT%% nested %%PROBE%% payload_marker_$(ARCH).dll || exit /b 1\r\n%%LAUNCHER%% --codepage=shift-jis -- tests\\shell_link_ansi_$(ARCH).exe || exit /b 1\r\n\r\necho smoke tests passed for $(ARCH)\r\n' > $(ARTIFACT_DIR)/run-smoke-tests.cmd
+	sh resources/runner/write-smoke-tests.sh $(ARCH) $(ARTIFACT_DIR)/run-smoke-tests.cmd
 
 $(TARGET): $(LAUNCHER_EXE)
 	cp $< $@

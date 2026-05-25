@@ -22,15 +22,26 @@ int main(void) {
     HANDLE file;
     int sjis_len;
     int exit_code = 2;
+    DWORD attempt;
 
-    if (!GetTempPathW(MAX_PATH, temp_dir) ||
-        !GetTempFileNameW(temp_dir, L"lnk", 0, base_dir)) {
+    if (!GetTempPathW(MAX_PATH, temp_dir)) {
         printf("temporary path setup failed: %lu\n", GetLastError());
         return 2;
     }
-    DeleteFileW(base_dir);
-    if (!CreateDirectoryW(base_dir, NULL)) {
-        printf("CreateDirectoryW(base) failed: %lu\n", GetLastError());
+
+    for (attempt = 0; attempt < 32; ++attempt) {
+        wsprintfW(base_dir, L"%lsw32u8_lnk_%lu_%lu",
+                  temp_dir, GetCurrentProcessId(), GetTickCount() + attempt);
+        if (CreateDirectoryW(base_dir, NULL)) {
+            break;
+        }
+        if (GetLastError() != ERROR_ALREADY_EXISTS) {
+            printf("CreateDirectoryW(base) failed: %lu\n", GetLastError());
+            return 2;
+        }
+    }
+    if (attempt == 32) {
+        printf("CreateDirectoryW(base) failed: no unique directory\n");
         return 2;
     }
 
