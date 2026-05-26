@@ -18,3 +18,4 @@
 /tests/injection_driver_*.exe
 /tests/win32_utf8_ansi_*.exe
 /tests/shell_link_ansi_*.exe
+/tests/mixed_encoding_path_*.exe

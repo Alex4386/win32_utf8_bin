@@ -21,7 +21,8 @@ ARTIFACT_TESTS = \
 	tests/probe_$(ARCH).exe \
 	tests/process_parent_$(ARCH).exe \
 	tests/win32_utf8_ansi_$(ARCH).exe \
-	tests/shell_link_ansi_$(ARCH).exe
+	tests/shell_link_ansi_$(ARCH).exe \
+	tests/mixed_encoding_path_$(ARCH).exe
 
 TARGET = $(notdir $(LAUNCHER_EXE))
 

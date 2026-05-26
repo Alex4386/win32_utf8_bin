@@ -7,7 +7,7 @@ else
 endif
 
 CFLAGS = -D_WIN32_WINNT=0x0501
-TARGETS = probe_$(ARCH).exe process_parent_$(ARCH).exe payload_marker_$(ARCH).dll injection_driver_$(ARCH).exe win32_utf8_ansi_$(ARCH).exe shell_link_ansi_$(ARCH).exe
+TARGETS = probe_$(ARCH).exe process_parent_$(ARCH).exe payload_marker_$(ARCH).dll injection_driver_$(ARCH).exe win32_utf8_ansi_$(ARCH).exe shell_link_ansi_$(ARCH).exe mixed_encoding_path_$(ARCH).exe
 
 all: $(TARGETS)
 
@@ -23,6 +23,9 @@ win32_utf8_ansi_$(ARCH).exe: win32_utf8_ansi.c
 shell_link_ansi_$(ARCH).exe: shell_link_ansi.c
 	$(CC) $(CFLAGS) -o $@ $< -lole32 -luuid
 
+mixed_encoding_path_$(ARCH).exe: mixed_encoding_path.c
+	$(CC) $(CFLAGS) -o $@ $<
+
 payload_marker_$(ARCH).dll: payload_marker.c
 	$(CC) $(CFLAGS) -shared -o $@ $<
 
@@ -35,6 +38,6 @@ run-injection: all
 	./injection_driver_$(ARCH).exe ../dll_propagator/dll_propagator.$(ARCH).dll ./payload_marker_$(ARCH).dll ./process_parent_$(ARCH).exe nested ./probe_$(ARCH).exe payload_marker_$(ARCH).dll
 
 clean:
-	rm -f probe_*.exe process_parent_*.exe payload_marker_*.dll injection_driver_*.exe win32_utf8_ansi_*.exe shell_link_ansi_*.exe w32u8_*.tmp
+	rm -f probe_*.exe process_parent_*.exe payload_marker_*.dll injection_driver_*.exe win32_utf8_ansi_*.exe shell_link_ansi_*.exe mixed_encoding_path_*.exe w32u8_*.tmp
 
 .PHONY: all run-injection clean

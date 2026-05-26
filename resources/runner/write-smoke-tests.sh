@@ -27,6 +27,7 @@ tests\injection_driver_$arch.exe %PROP% %PAYLOAD% %PROBE% direct payload_marker_
 tests\injection_driver_$arch.exe %PROP% %PAYLOAD% %PARENT% w %PROBE% payload_marker_$arch.dll || exit /b 1
 tests\injection_driver_$arch.exe %PROP% %PAYLOAD% %PARENT% nested %PROBE% payload_marker_$arch.dll || exit /b 1
 %LAUNCHER% --codepage=shift-jis -- tests\shell_link_ansi_$arch.exe || exit /b 1
+%LAUNCHER% --codepage=shift-jis -- tests\mixed_encoding_path_$arch.exe || exit /b 1
 
 echo smoke tests passed for $arch
 EOF
